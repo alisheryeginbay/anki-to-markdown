@@ -152,8 +152,16 @@ public final class AnkiImporter: Sendable {
     }
     
     private func decompressZstd(_ data: Data) throws -> Data {
+        // Use streaming decompression - handles frames without content size
+        let inputStream = InputStream(data: data)
+        let outputStream = OutputStream(toMemory: ())
+
         do {
-            return try ZStd.decompress(data)
+            try ZStd.decompress(src: inputStream, dst: outputStream)
+            guard let decompressed = outputStream.property(forKey: .dataWrittenToMemoryStreamKey) as? Data else {
+                throw ImportError.decompressionFailed("Failed to read decompressed data")
+            }
+            return decompressed
         } catch {
             throw ImportError.decompressionFailed(error.localizedDescription)
         }
