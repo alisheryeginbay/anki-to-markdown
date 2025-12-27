@@ -284,7 +284,7 @@ public final class AnkiImporter: Sendable {
 
         progress(.extracting)
         try unzip(url, to: tempDir)
-        await Task.yield()
+        try await Task.sleep(nanoseconds: 1_000_000)
 
         let dbData = try extractDatabase(tempDir: tempDir)
         let dbPath = tempDir.appendingPathComponent("collection.sqlite")
@@ -292,7 +292,7 @@ public final class AnkiImporter: Sendable {
 
         progress(.readingDecks)
         let decks = try readDecks(from: dbPath)
-        await Task.yield()
+        try await Task.sleep(nanoseconds: 1_000_000)
 
         let cards = try await readCardsAsync(from: dbPath, progress: progress)
 
@@ -370,7 +370,7 @@ public final class AnkiImporter: Sendable {
             currentCard += 1
             if currentCard % 100 == 0 || currentCard == totalCards {
                 progress(.readingCards(current: currentCard, total: totalCards))
-                await Task.yield()  // Allow consumer to process
+                try await Task.sleep(nanoseconds: 1_000_000)  // 1ms - force suspension
             }
         }
         sqlite3_finalize(stmt)
