@@ -89,14 +89,72 @@ for filename in collection.media.filenames {
 ### AnkiImporter
 
 ```swift
-// Import from file URL (async, recommended)
+// Import from file URL (async)
 func importCollection(from url: URL) async throws -> AnkiCollection
 
-// Import from Data (async)
-func importCollection(from data: Data) async throws -> AnkiCollection
+// Import with progress callback
+func importCollection(
+    from url: URL,
+    progress: @escaping @Sendable (ImportProgress) -> Void
+) async throws -> AnkiCollection
+
+// Import as async stream (for SwiftUI .task)
+func importCollectionStream(from url: URL) -> AsyncThrowingStream<ImportEvent, Error>
 
 // Synchronous version (blocks calling thread)
 func importCollectionSync(from url: URL) throws -> AnkiCollection
+```
+
+### Progress Reporting
+
+```swift
+// Progress stages
+enum ImportProgress: Sendable {
+    case extracting
+    case readingDecks
+    case readingCards(current: Int, total: Int)
+    case parsingMedia
+}
+
+// Stream events
+enum ImportEvent: Sendable {
+    case progress(ImportProgress)
+    case completed(AnkiCollection)
+}
+```
+
+**Example - Callback:**
+```swift
+let collection = try await importer.importCollection(from: url) { progress in
+    switch progress {
+    case .extracting:
+        print("Extracting archive...")
+    case .readingDecks:
+        print("Reading decks...")
+    case .readingCards(let current, let total):
+        print("Reading cards: \(current)/\(total)")
+    case .parsingMedia:
+        print("Parsing media...")
+    }
+}
+```
+
+**Example - AsyncStream (SwiftUI):**
+```swift
+.task {
+    do {
+        for try await event in importer.importCollectionStream(from: url) {
+            switch event {
+            case .progress(let progress):
+                self.progress = progress
+            case .completed(let collection):
+                self.collection = collection
+            }
+        }
+    } catch {
+        self.error = error
+    }
+}
 ```
 
 ### AnkiCollection

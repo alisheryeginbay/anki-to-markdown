@@ -167,10 +167,26 @@ public struct AnkiCollection: Sendable {
     }
 }
 
+// MARK: - Progress Reporting
+
+/// Progress updates during import
+public enum ImportProgress: Sendable {
+    case extracting
+    case readingDecks
+    case readingCards(current: Int, total: Int)
+    case parsingMedia
+}
+
+/// Events emitted by the streaming import API
+public enum ImportEvent: Sendable {
+    case progress(ImportProgress)
+    case completed(AnkiCollection)
+}
+
 // MARK: - Importer
 
 public final class AnkiImporter: Sendable {
-    
+
     public enum ImportError: LocalizedError {
         case fileNotFound
         case invalidArchive
@@ -191,6 +207,8 @@ public final class AnkiImporter: Sendable {
     
     public init() {}
 
+    // MARK: - Async Import (no progress)
+
     /// Imports an Anki collection asynchronously
     /// Media files are loaded lazily - only when accessed via `collection.media.data(for:)`
     public func importCollection(from url: URL) async throws -> AnkiCollection {
@@ -209,22 +227,82 @@ public final class AnkiImporter: Sendable {
         return try await importCollection(from: tempFile)
     }
 
+    // MARK: - Async Import with Progress Callback
+
+    /// Imports an Anki collection with progress reporting via callback
+    public func importCollection(
+        from url: URL,
+        progress: @escaping @Sendable (ImportProgress) -> Void
+    ) async throws -> AnkiCollection {
+        try await Task.detached {
+            try self.importCollectionSync(from: url, progress: progress)
+        }.value
+    }
+
+    /// Imports an Anki collection from raw data with progress reporting
+    public func importCollection(
+        from data: Data,
+        progress: @escaping @Sendable (ImportProgress) -> Void
+    ) async throws -> AnkiCollection {
+        let tempFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString + ".anki")
+        try data.write(to: tempFile)
+        defer { try? FileManager.default.removeItem(at: tempFile) }
+
+        return try await importCollection(from: tempFile, progress: progress)
+    }
+
+    // MARK: - AsyncStream Import
+
+    /// Imports an Anki collection as an async stream of events
+    /// Use this for SwiftUI integration with `.task` modifier
+    public func importCollectionStream(from url: URL) -> AsyncThrowingStream<ImportEvent, Error> {
+        AsyncThrowingStream { continuation in
+            Task.detached {
+                do {
+                    let collection = try self.importCollectionSync(from: url) { progress in
+                        continuation.yield(.progress(progress))
+                    }
+                    continuation.yield(.completed(collection))
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
+    }
+
+    // MARK: - Synchronous Import
+
     /// Synchronous import - prefer async version to avoid blocking
     public func importCollectionSync(from url: URL) throws -> AnkiCollection {
+        try importCollectionSync(from: url, progress: nil)
+    }
+
+    /// Synchronous import with optional progress callback
+    public func importCollectionSync(
+        from url: URL,
+        progress: (@Sendable (ImportProgress) -> Void)?
+    ) throws -> AnkiCollection {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
 
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         // Note: tempDir cleanup is handled by AnkiMediaStore.deinit
 
+        progress?(.extracting)
         try unzip(url, to: tempDir)
 
         let dbData = try extractDatabase(tempDir: tempDir)
         let dbPath = tempDir.appendingPathComponent("collection.sqlite")
         try dbData.write(to: dbPath)
 
+        progress?(.readingDecks)
         let decks = try readDecks(from: dbPath)
-        let cards = try readCards(from: dbPath)
+
+        let cards = try readCards(from: dbPath, progress: progress)
+
+        progress?(.parsingMedia)
         let mediaMapping = try parseMediaMapping(tempDir: tempDir)
         let mediaStore = AnkiMediaStore(tempDirectory: tempDir, mapping: mediaMapping)
 
@@ -344,7 +422,10 @@ public final class AnkiImporter: Sendable {
         return decks.sorted { $0.name < $1.name }
     }
 
-    private func readCards(from dbPath: URL) throws -> [AnkiCard] {
+    private func readCards(
+        from dbPath: URL,
+        progress: (@Sendable (ImportProgress) -> Void)?
+    ) throws -> [AnkiCard] {
         var db: OpaquePointer?
 
         guard sqlite3_open(dbPath.path, &db) == SQLITE_OK else {
@@ -371,12 +452,24 @@ public final class AnkiImporter: Sendable {
         }
         sqlite3_finalize(stmt)
 
+        // Get total card count for progress reporting
+        var totalCards = 0
+        if sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM cards", -1, &stmt, nil) == SQLITE_OK {
+            if sqlite3_step(stmt) == SQLITE_ROW {
+                totalCards = Int(sqlite3_column_int(stmt, 0))
+            }
+            sqlite3_finalize(stmt)
+        }
+
         // Read cards with deck association
         var cards: [AnkiCard] = []
+        cards.reserveCapacity(totalCards)
+
         guard sqlite3_prepare_v2(db, "SELECT id, nid, did FROM cards", -1, &stmt, nil) == SQLITE_OK else {
             throw ImportError.sqliteError(String(cString: sqlite3_errmsg(db)))
         }
 
+        var currentCard = 0
         while sqlite3_step(stmt) == SQLITE_ROW {
             let cardId = sqlite3_column_int64(stmt, 0)
             let noteId = sqlite3_column_int64(stmt, 1)
@@ -390,6 +483,12 @@ public final class AnkiImporter: Sendable {
                     fields: note.fields,
                     tags: note.tags
                 ))
+            }
+
+            currentCard += 1
+            // Report progress every 100 cards to avoid callback spam
+            if currentCard % 100 == 0 || currentCard == totalCards {
+                progress?(.readingCards(current: currentCard, total: totalCards))
             }
         }
         sqlite3_finalize(stmt)
