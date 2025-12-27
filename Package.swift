@@ -16,11 +16,15 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/tsolomko/SWCompression.git", from: "4.8.0"),
+        .package(url: "https://github.com/awxkee/zstd.swift.git", from: "1.0.0"),
     ],
     targets: [
         .target(
             name: "AnkiToMarkdown",
-            dependencies: ["SWCompression"]
+            dependencies: [
+                "SWCompression",
+                .product(name: "zstd", package: "zstd.swift")
+            ]
         ),
         .testTarget(
             name: "AnkiToMarkdownTests",
