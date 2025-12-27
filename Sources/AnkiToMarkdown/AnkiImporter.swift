@@ -257,20 +257,11 @@ public final class AnkiImporter: Sendable {
     /// Imports an Anki collection as an async stream of events
     /// Use this for SwiftUI integration with `.task` modifier
     public func importCollectionStream(from url: URL) -> AsyncThrowingStream<ImportEvent, Error> {
-        AsyncThrowingStream { continuation in
+        AsyncThrowingStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
             Task.detached {
                 do {
-                    let collection = try await withCheckedThrowingContinuation { (innerCont: CheckedContinuation<AnkiCollection, Error>) in
-                        do {
-                            let result = try self.importCollectionSync(from: url) { progress in
-                                continuation.yield(.progress(progress))
-                                // Give consumer time to process
-                                Thread.sleep(forTimeInterval: 0.001)
-                            }
-                            innerCont.resume(returning: result)
-                        } catch {
-                            innerCont.resume(throwing: error)
-                        }
+                    let collection = try await self.importCollectionAsync(from: url) { progress in
+                        continuation.yield(.progress(progress))
                     }
                     continuation.yield(.completed(collection))
                     continuation.finish()
@@ -279,6 +270,112 @@ public final class AnkiImporter: Sendable {
                 }
             }
         }
+    }
+
+    /// Internal async import that yields between cards for proper progress streaming
+    private func importCollectionAsync(
+        from url: URL,
+        progress: @escaping (ImportProgress) -> Void
+    ) async throws -> AnkiCollection {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+
+        progress(.extracting)
+        try unzip(url, to: tempDir)
+        await Task.yield()
+
+        let dbData = try extractDatabase(tempDir: tempDir)
+        let dbPath = tempDir.appendingPathComponent("collection.sqlite")
+        try dbData.write(to: dbPath)
+
+        progress(.readingDecks)
+        let decks = try readDecks(from: dbPath)
+        await Task.yield()
+
+        let cards = try await readCardsAsync(from: dbPath, progress: progress)
+
+        progress(.parsingMedia)
+        let mediaMapping = try parseMediaMapping(tempDir: tempDir)
+        let mediaStore = AnkiMediaStore(tempDirectory: tempDir, mapping: mediaMapping)
+
+        return AnkiCollection(decks: decks, cards: cards, media: mediaStore)
+    }
+
+    /// Async card reading with yields for progress streaming
+    private func readCardsAsync(
+        from dbPath: URL,
+        progress: @escaping (ImportProgress) -> Void
+    ) async throws -> [AnkiCard] {
+        var db: OpaquePointer?
+
+        guard sqlite3_open(dbPath.path, &db) == SQLITE_OK else {
+            throw ImportError.sqliteError("Failed to open database")
+        }
+        defer { sqlite3_close(db) }
+
+        // Build note lookup
+        var notesMap: [Int64: (fields: [String], tags: [String])] = [:]
+        var stmt: OpaquePointer?
+
+        guard sqlite3_prepare_v2(db, "SELECT id, flds, tags FROM notes", -1, &stmt, nil) == SQLITE_OK else {
+            throw ImportError.sqliteError(String(cString: sqlite3_errmsg(db)))
+        }
+
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            let noteId = sqlite3_column_int64(stmt, 0)
+            let flds = sqlite3_column_text(stmt, 1).map { String(cString: $0) } ?? ""
+            let tagsStr = sqlite3_column_text(stmt, 2).map { String(cString: $0) } ?? ""
+            notesMap[noteId] = (
+                fields: flds.components(separatedBy: "\u{1f}"),
+                tags: tagsStr.split(separator: " ").map(String.init)
+            )
+        }
+        sqlite3_finalize(stmt)
+
+        // Get total count
+        var totalCards = 0
+        if sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM cards", -1, &stmt, nil) == SQLITE_OK {
+            if sqlite3_step(stmt) == SQLITE_ROW {
+                totalCards = Int(sqlite3_column_int(stmt, 0))
+            }
+            sqlite3_finalize(stmt)
+        }
+
+        // Read cards with async yields
+        var cards: [AnkiCard] = []
+        cards.reserveCapacity(totalCards)
+
+        guard sqlite3_prepare_v2(db, "SELECT id, nid, did FROM cards", -1, &stmt, nil) == SQLITE_OK else {
+            throw ImportError.sqliteError(String(cString: sqlite3_errmsg(db)))
+        }
+
+        var currentCard = 0
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            let cardId = sqlite3_column_int64(stmt, 0)
+            let noteId = sqlite3_column_int64(stmt, 1)
+            let deckId = sqlite3_column_int64(stmt, 2)
+
+            if let note = notesMap[noteId] {
+                cards.append(AnkiCard(
+                    id: cardId,
+                    noteId: noteId,
+                    deckId: deckId,
+                    fields: note.fields,
+                    tags: note.tags
+                ))
+            }
+
+            currentCard += 1
+            if currentCard % 100 == 0 || currentCard == totalCards {
+                progress(.readingCards(current: currentCard, total: totalCards))
+                await Task.yield()  // Allow consumer to process
+            }
+        }
+        sqlite3_finalize(stmt)
+
+        return cards
     }
 
     // MARK: - Synchronous Import
