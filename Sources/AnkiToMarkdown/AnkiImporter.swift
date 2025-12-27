@@ -122,7 +122,7 @@ public final class AnkiImporter: Sendable {
         for name in dbNames {
             let dbPath = tempDir.appendingPathComponent(name)
             if FileManager.default.fileExists(atPath: dbPath.path) {
-                var data = try Data(contentsOf: dbPath)
+                let data = try Data(contentsOf: dbPath)
 
                 // Check if already a valid SQLite database
                 if isSQLiteDatabase(data) {
