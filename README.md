@@ -25,11 +25,36 @@ let importer = AnkiImporter()
 let url = URL(fileURLWithPath: "/path/to/deck.apkg")
 let collection = try importer.importCollection(from: url)
 
-// Access cards
+// Access decks (with subdeck hierarchy)
+for deck in collection.decks {
+    print(deck.name)           // "Parent::Child::Grandchild"
+    print(deck.shortName)      // "Grandchild"
+    print(deck.isSubdeck)      // true
+    print(deck.pathComponents) // ["Parent", "Child", "Grandchild"]
+    print(deck.parentPath)     // "Parent::Child" (nil for root decks)
+}
+
+// Get root decks and their subdecks
+for rootDeck in collection.rootDecks {
+    print("Deck: \(rootDeck.name)")
+    for subdeck in collection.subdecks(of: rootDeck) {
+        print("  - \(subdeck.shortName)")
+    }
+}
+
+// Access cards grouped by deck
+for (deckId, cards) in collection.cardsByDeck {
+    if let deck = collection.deck(withId: deckId) {
+        print("\(deck.name): \(cards.count) cards")
+    }
+}
+
+// Access individual cards
 for card in collection.cards {
     print(card.front)
     print(card.back)
     print(card.tags)
+    print(card.deckId)  // ID of the deck this card belongs to
     print(card.mediaReferences)
 }
 
@@ -63,11 +88,19 @@ func importCollection(from data: Data) throws -> AnkiCollection
 ### AnkiCollection
 
 ```swift
+let decks: [AnkiDeck]
 let cards: [AnkiCard]
 let mediaFiles: [String: Data]
 
+var deckCount: Int
 var cardCount: Int
 var mediaCount: Int
+
+// Deck helpers
+var cardsByDeck: [Int64: [AnkiCard]]  // Cards grouped by deck ID
+var rootDecks: [AnkiDeck]             // Top-level decks (no parent)
+func deck(withId id: Int64) -> AnkiDeck?
+func subdecks(of deck: AnkiDeck) -> [AnkiDeck]
 
 // Export
 func toMarkdown(mediaFolder: String = "media") -> String
@@ -75,10 +108,24 @@ func toJSON() throws -> Data
 func export(to directory: URL, mediaFolder: String = "media") throws
 ```
 
+### AnkiDeck
+
+```swift
+let id: Int64
+let name: String       // Full name like "Parent::Child::Grandchild"
+
+var shortName: String           // Just "Grandchild"
+var pathComponents: [String]    // ["Parent", "Child", "Grandchild"]
+var parentPath: String?         // "Parent::Child" (nil for root decks)
+var isSubdeck: Bool             // true if has "::" in name
+```
+
 ### AnkiCard
 
 ```swift
 let id: Int64
+let noteId: Int64
+let deckId: Int64      // ID of the deck this card belongs to
 let fields: [String]
 let tags: [String]
 
@@ -126,5 +173,5 @@ I, me
 
 ## Requirements
 
-- macOS 13+ / iOS 16+
+- macOS 14+ / iOS 17+
 - Swift 5.9+
