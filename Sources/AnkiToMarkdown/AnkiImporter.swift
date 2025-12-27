@@ -1,6 +1,7 @@
 import Foundation
 import SQLite3
 import SWCompression
+import Compression
 
 // MARK: - Models
 
@@ -147,11 +148,23 @@ public final class AnkiImporter: Sendable {
     }
     
     private func decompressZstd(_ data: Data) throws -> Data {
-        do {
-            return try ZstdArchive.unarchive(archive: data)
-        } catch {
-            throw ImportError.decompressionFailed(error.localizedDescription)
+        let bufferSize = data.count * 20
+        let destinationBuffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)
+        defer { destinationBuffer.deallocate() }
+
+        let decompressedSize = data.withUnsafeBytes { sourcePtr -> Int in
+            guard let baseAddress = sourcePtr.bindMemory(to: UInt8.self).baseAddress else { return 0 }
+            return compression_decode_buffer(
+                destinationBuffer, bufferSize,
+                baseAddress, data.count,
+                nil, compression_algorithm(rawValue: 11)  // COMPRESSION_ZSTD = 11
+            )
         }
+
+        guard decompressedSize > 0 else {
+            throw ImportError.decompressionFailed("Zstd decompression failed")
+        }
+        return Data(bytes: destinationBuffer, count: decompressedSize)
     }
     
     private func readCards(from dbPath: URL) throws -> [AnkiCard] {
