@@ -260,8 +260,17 @@ public final class AnkiImporter: Sendable {
         AsyncThrowingStream { continuation in
             Task.detached {
                 do {
-                    let collection = try self.importCollectionSync(from: url) { progress in
-                        continuation.yield(.progress(progress))
+                    let collection = try await withCheckedThrowingContinuation { (innerCont: CheckedContinuation<AnkiCollection, Error>) in
+                        do {
+                            let result = try self.importCollectionSync(from: url) { progress in
+                                continuation.yield(.progress(progress))
+                                // Give consumer time to process
+                                Thread.sleep(forTimeInterval: 0.001)
+                            }
+                            innerCont.resume(returning: result)
+                        } catch {
+                            innerCont.resume(throwing: error)
+                        }
                     }
                     continuation.yield(.completed(collection))
                     continuation.finish()
