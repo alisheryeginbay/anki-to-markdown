@@ -210,10 +210,10 @@ public final class AnkiImporter: Sendable {
         
         var data = try Data(contentsOf: mediaPath)
         
-        if isZstdCompressed(data) {
-            data = try decompressZstd(data)
+        if isZstdCompressed(data), let decompressed = try? decompressZstd(data) {
+            data = decompressed
         }
-        
+
         // Try JSON first
         if let json = try? JSONSerialization.jsonObject(with: data) as? [String: String] {
             return json
