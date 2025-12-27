@@ -13,6 +13,10 @@ let package = Package(
             name: "AnkiToMarkdown",
             targets: ["AnkiToMarkdown"]
         ),
+        .executable(
+            name: "anki-export",
+            targets: ["anki-export"]
+        ),
     ],
     dependencies: [
         .package(url: "https://github.com/tsolomko/SWCompression.git", from: "4.8.0"),
@@ -28,6 +32,10 @@ let package = Package(
         ),
         .testTarget(
             name: "AnkiToMarkdownTests",
+            dependencies: ["AnkiToMarkdown"]
+        ),
+        .executableTarget(
+            name: "anki-export",
             dependencies: ["AnkiToMarkdown"]
         ),
     ]

@@ -580,9 +580,9 @@ public final class AnkiImporter: Sendable {
     private func parseProtobufMediaMap(_ data: Data) -> [String: String] {
         var mapping: [String: String] = [:]
         let text = String(decoding: data, as: UTF8.self)
-        
+
         guard let regex = try? NSRegularExpression(
-            pattern: #"([a-zA-Z0-9_\-\. ]+\.(mp3|png|jpg|jpeg|gif|webp|wav|ogg|mp4|webm|svg))"#
+            pattern: #"([^\x00-\x1f\x7f/\\:*?"<>|]+\.(mp3|png|jpg|jpeg|gif|webp|wav|ogg|mp4|webm|svg))"#
         ) else { return [:] }
         
         let range = NSRange(text.startIndex..., in: text)
