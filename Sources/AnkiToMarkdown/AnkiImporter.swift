@@ -231,11 +231,14 @@ public final class AnkiImporter: Sendable {
         var decks: [AnkiDeck] = []
 
         // Try new schema first (decks table)
+        // Note: New Anki format uses \x1f (unit separator) for hierarchy instead of ::
         var stmt: OpaquePointer?
         if sqlite3_prepare_v2(db, "SELECT id, name FROM decks", -1, &stmt, nil) == SQLITE_OK {
             while sqlite3_step(stmt) == SQLITE_ROW {
                 let id = sqlite3_column_int64(stmt, 0)
-                let name = sqlite3_column_text(stmt, 1).map { String(cString: $0) } ?? ""
+                var name = sqlite3_column_text(stmt, 1).map { String(cString: $0) } ?? ""
+                // Convert \x1f separator to :: for consistency with Anki's display format
+                name = name.replacingOccurrences(of: "\u{1f}", with: "::")
                 decks.append(AnkiDeck(id: id, name: name))
             }
             sqlite3_finalize(stmt)
