@@ -44,13 +44,13 @@ extension AnkiCollection {
         let json = try toJSON()
         try json.write(to: directory.appendingPathComponent("cards.json"))
         
-        // Media
-        if !mediaFiles.isEmpty {
+        // Media - copy files directly without loading into memory
+        if media.count > 0 {
             let mediaDir = directory.appendingPathComponent(mediaFolder)
             try FileManager.default.createDirectory(at: mediaDir, withIntermediateDirectories: true)
-            
-            for (filename, data) in mediaFiles {
-                try data.write(to: mediaDir.appendingPathComponent(filename))
+
+            for filename in media.filenames {
+                try media.copy(filename: filename, to: mediaDir.appendingPathComponent(filename))
             }
         }
     }

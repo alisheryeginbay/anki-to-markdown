@@ -70,14 +70,80 @@ public struct AnkiCard: Identifiable, Sendable, Codable {
     }
 }
 
+// MARK: - Lazy Media Store
+
+/// Provides lazy access to media files without loading everything into memory
+public final class AnkiMediaStore: @unchecked Sendable {
+    private let tempDirectory: URL
+    private let mapping: [String: String]  // filename -> index
+    private let lock = NSLock()
+    private var cache: [String: Data] = [:]
+
+    /// All available media filenames
+    public var filenames: [String] { Array(mapping.keys) }
+
+    /// Number of media files
+    public var count: Int { mapping.count }
+
+    init(tempDirectory: URL, mapping: [String: String]) {
+        self.tempDirectory = tempDirectory
+        // Invert: [index: filename] -> [filename: index]
+        self.mapping = Dictionary(uniqueKeysWithValues: mapping.map { ($1, $0) })
+    }
+
+    deinit {
+        try? FileManager.default.removeItem(at: tempDirectory)
+    }
+
+    /// Get URL for a media file (doesn't load into memory)
+    public func url(for filename: String) -> URL? {
+        guard let index = mapping[filename] else { return nil }
+        let path = tempDirectory.appendingPathComponent(index)
+        return FileManager.default.fileExists(atPath: path.path) ? path : nil
+    }
+
+    /// Load media data on demand (cached after first load)
+    public func data(for filename: String) -> Data? {
+        lock.lock()
+        defer { lock.unlock() }
+
+        if let cached = cache[filename] {
+            return cached
+        }
+
+        guard let fileURL = url(for: filename),
+              let data = try? Data(contentsOf: fileURL) else {
+            return nil
+        }
+
+        cache[filename] = data
+        return data
+    }
+
+    /// Copy a media file to destination without loading into memory
+    public func copy(filename: String, to destination: URL) throws {
+        guard let sourceURL = url(for: filename) else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+        try FileManager.default.copyItem(at: sourceURL, to: destination)
+    }
+
+    /// Clear the in-memory cache
+    public func clearCache() {
+        lock.lock()
+        cache.removeAll()
+        lock.unlock()
+    }
+}
+
 public struct AnkiCollection: Sendable {
     public let decks: [AnkiDeck]
     public let cards: [AnkiCard]
-    public let mediaFiles: [String: Data]
+    public let media: AnkiMediaStore
 
     public var deckCount: Int { decks.count }
     public var cardCount: Int { cards.count }
-    public var mediaCount: Int { mediaFiles.count }
+    public var mediaCount: Int { media.count }
 
     /// Returns cards grouped by deck ID
     public var cardsByDeck: [Int64: [AnkiCard]] {
@@ -124,13 +190,32 @@ public final class AnkiImporter: Sendable {
     }
     
     public init() {}
-    
-    public func importCollection(from url: URL) throws -> AnkiCollection {
+
+    /// Imports an Anki collection asynchronously
+    /// Media files are loaded lazily - only when accessed via `collection.media.data(for:)`
+    public func importCollection(from url: URL) async throws -> AnkiCollection {
+        try await Task.detached {
+            try self.importCollectionSync(from: url)
+        }.value
+    }
+
+    /// Imports an Anki collection from raw data asynchronously
+    public func importCollection(from data: Data) async throws -> AnkiCollection {
+        let tempFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString + ".anki")
+        try data.write(to: tempFile)
+        defer { try? FileManager.default.removeItem(at: tempFile) }
+
+        return try await importCollection(from: tempFile)
+    }
+
+    /// Synchronous import - prefer async version to avoid blocking
+    public func importCollectionSync(from url: URL) throws -> AnkiCollection {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
 
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: tempDir) }
+        // Note: tempDir cleanup is handled by AnkiMediaStore.deinit
 
         try unzip(url, to: tempDir)
 
@@ -140,18 +225,10 @@ public final class AnkiImporter: Sendable {
 
         let decks = try readDecks(from: dbPath)
         let cards = try readCards(from: dbPath)
-        let mediaFiles = try extractMedia(tempDir: tempDir)
+        let mediaMapping = try parseMediaMapping(tempDir: tempDir)
+        let mediaStore = AnkiMediaStore(tempDirectory: tempDir, mapping: mediaMapping)
 
-        return AnkiCollection(decks: decks, cards: cards, mediaFiles: mediaFiles)
-    }
-    
-    public func importCollection(from data: Data) throws -> AnkiCollection {
-        let tempFile = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString + ".anki")
-        try data.write(to: tempFile)
-        defer { try? FileManager.default.removeItem(at: tempFile) }
-        
-        return try importCollection(from: tempFile)
+        return AnkiCollection(decks: decks, cards: cards, media: mediaStore)
     }
     
     // MARK: - Private
@@ -318,20 +395,6 @@ public final class AnkiImporter: Sendable {
         sqlite3_finalize(stmt)
 
         return cards
-    }
-    
-    private func extractMedia(tempDir: URL) throws -> [String: Data] {
-        var mediaFiles: [String: Data] = [:]
-        let mediaMap = try parseMediaMapping(tempDir: tempDir)
-        
-        for (index, filename) in mediaMap {
-            let filePath = tempDir.appendingPathComponent(index)
-            if FileManager.default.fileExists(atPath: filePath.path) {
-                mediaFiles[filename] = try Data(contentsOf: filePath)
-            }
-        }
-        
-        return mediaFiles
     }
     
     private func parseMediaMapping(tempDir: URL) throws -> [String: String] {

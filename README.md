@@ -21,9 +21,9 @@ import AnkiToMarkdown
 
 let importer = AnkiImporter()
 
-// Import from file
+// Import from file (async)
 let url = URL(fileURLWithPath: "/path/to/deck.apkg")
-let collection = try importer.importCollection(from: url)
+let collection = try await importer.importCollection(from: url)
 
 // Access decks (with subdeck hierarchy)
 for deck in collection.decks {
@@ -67,9 +67,20 @@ let markdown = collection.toMarkdown()
 // Or get JSON data
 let json = try collection.toJSON()
 
-// Access media files
-for (filename, data) in collection.mediaFiles {
-    // save or process media
+// Access media files (lazy loaded - no memory bloat)
+for filename in collection.media.filenames {
+    // Get URL without loading into memory
+    if let url = collection.media.url(for: filename) {
+        print(url)
+    }
+
+    // Or load data on demand
+    if let data = collection.media.data(for: filename) {
+        // process media
+    }
+
+    // Or copy directly to destination
+    try collection.media.copy(filename: filename, to: destinationURL)
 }
 ```
 
@@ -78,11 +89,14 @@ for (filename, data) in collection.mediaFiles {
 ### AnkiImporter
 
 ```swift
-// Import from file URL
-func importCollection(from url: URL) throws -> AnkiCollection
+// Import from file URL (async, recommended)
+func importCollection(from url: URL) async throws -> AnkiCollection
 
-// Import from Data
-func importCollection(from data: Data) throws -> AnkiCollection
+// Import from Data (async)
+func importCollection(from data: Data) async throws -> AnkiCollection
+
+// Synchronous version (blocks calling thread)
+func importCollectionSync(from url: URL) throws -> AnkiCollection
 ```
 
 ### AnkiCollection
@@ -90,7 +104,7 @@ func importCollection(from data: Data) throws -> AnkiCollection
 ```swift
 let decks: [AnkiDeck]
 let cards: [AnkiCard]
-let mediaFiles: [String: Data]
+let media: AnkiMediaStore  // Lazy-loaded media access
 
 var deckCount: Int
 var cardCount: Int
@@ -106,6 +120,27 @@ func subdecks(of deck: AnkiDeck) -> [AnkiDeck]
 func toMarkdown(mediaFolder: String = "media") -> String
 func toJSON() throws -> Data
 func export(to directory: URL, mediaFolder: String = "media") throws
+```
+
+### AnkiMediaStore
+
+Lazy media access - files are only loaded when requested.
+
+```swift
+var filenames: [String]   // All available media filenames
+var count: Int
+
+// Get file URL without loading into memory
+func url(for filename: String) -> URL?
+
+// Load data on demand (cached after first load)
+func data(for filename: String) -> Data?
+
+// Copy file directly to destination (never loads into memory)
+func copy(filename: String, to destination: URL) throws
+
+// Clear in-memory cache
+func clearCache()
 ```
 
 ### AnkiDeck
