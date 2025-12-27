@@ -148,7 +148,7 @@ public final class AnkiImporter: Sendable {
     
     private func decompressZstd(_ data: Data) throws -> Data {
         do {
-            return try ZstdDecoder().decode(data)
+            return try ZstdArchive.unarchive(archive: data)
         } catch {
             throw ImportError.decompressionFailed(error.localizedDescription)
         }
