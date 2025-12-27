@@ -121,6 +121,18 @@ enum ImportEvent: Sendable {
     case progress(ImportProgress)
     case completed(AnkiCollection)
 }
+
+// Observable operation for SwiftUI (recommended)
+@Observable @MainActor
+class AnkiImportOperation {
+    var progress: ImportProgress
+    var collection: AnkiCollection?
+    var error: Error?
+    var isRunning: Bool
+
+    func start(from url: URL)
+    func start(from data: Data)
+}
 ```
 
 **Example - Callback:**
@@ -139,20 +151,44 @@ let collection = try await importer.importCollection(from: url) { progress in
 }
 ```
 
-**Example - AsyncStream (SwiftUI):**
+**Example - SwiftUI with @Observable (recommended):**
 ```swift
-.task {
-    do {
-        for try await event in importer.importCollectionStream(from: url) {
-            switch event {
-            case .progress(let progress):
-                self.progress = progress
-            case .completed(let collection):
-                self.collection = collection
+struct ImportView: View {
+    @State private var operation = AnkiImportOperation()
+
+    var body: some View {
+        VStack {
+            if operation.isRunning {
+                switch operation.progress {
+                case .extracting:
+                    Text("Extracting...")
+                case .readingDecks:
+                    Text("Reading decks...")
+                case .readingCards(let current, let total):
+                    ProgressView(value: Double(current), total: Double(total))
+                    Text("\(current) / \(total) cards")
+                case .parsingMedia:
+                    Text("Parsing media...")
+                }
+            }
+
+            if let collection = operation.collection {
+                Text("Imported \(collection.cardCount) cards")
             }
         }
-    } catch {
-        self.error = error
+        .onAppear {
+            operation.start(from: url)
+        }
+    }
+}
+```
+
+**Example - AsyncStream:**
+```swift
+for try await event in importer.importCollectionStream(from: url) {
+    switch event {
+    case .progress(let progress): handleProgress(progress)
+    case .completed(let collection): handleComplete(collection)
     }
 }
 ```
