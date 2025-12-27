@@ -579,22 +579,59 @@ public final class AnkiImporter: Sendable {
     
     private func parseProtobufMediaMap(_ data: Data) -> [String: String] {
         var mapping: [String: String] = [:]
-        let text = String(decoding: data, as: UTF8.self)
-
-        guard let regex = try? NSRegularExpression(
-            pattern: #"([^\x00-\x1f\x7f/\\:*?"<>|]+\.(mp3|png|jpg|jpeg|gif|webp|wav|ogg|mp4|webm|svg))"#
-        ) else { return [:] }
-        
-        let range = NSRange(text.startIndex..., in: text)
+        var pos = 0
         var index = 0
-        
-        for match in regex.matches(in: text, range: range) {
-            if let r = Range(match.range(at: 1), in: text) {
-                mapping[String(index)] = String(text[r])
-                index += 1
+
+        while pos < data.count {
+            // Each entry: 0a (field 1) + length + message content
+            guard data[pos] == 0x0a else { pos += 1; continue }
+            pos += 1
+
+            // Read outer message length
+            let (outerLen, outerLenBytes) = readVarint(data, at: pos)
+            guard outerLen > 0 && outerLenBytes > 0 else { continue }
+            pos += outerLenBytes
+
+            let messageEnd = pos + outerLen
+            guard messageEnd <= data.count else { break }
+
+            // Inside message: field 1 (0x0a) = filename
+            if pos < messageEnd && data[pos] == 0x0a {
+                pos += 1
+                let (filenameLen, filenameLenBytes) = readVarint(data, at: pos)
+                pos += filenameLenBytes
+
+                if filenameLen > 0 && pos + filenameLen <= messageEnd {
+                    let filenameData = data[pos..<(pos + filenameLen)]
+                    if let filename = String(data: filenameData, encoding: .utf8) {
+                        mapping[String(index)] = filename
+                        index += 1
+                    }
+                }
             }
+
+            pos = messageEnd
         }
-        
+
         return mapping
+    }
+
+    private func readVarint(_ data: Data, at pos: Int) -> (value: Int, bytesRead: Int) {
+        var value = 0
+        var shift = 0
+        var bytesRead = 0
+        var currentPos = pos
+
+        while currentPos < data.count {
+            let byte = data[currentPos]
+            value |= Int(byte & 0x7f) << shift
+            bytesRead += 1
+            currentPos += 1
+            if byte & 0x80 == 0 { break }
+            shift += 7
+            if shift > 28 { return (0, 0) }
+        }
+
+        return (value, bytesRead)
     }
 }

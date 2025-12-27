@@ -50,7 +50,10 @@ extension AnkiCollection {
             try FileManager.default.createDirectory(at: mediaDir, withIntermediateDirectories: true)
 
             for filename in media.filenames {
-                try media.copy(filename: filename, to: mediaDir.appendingPathComponent(filename))
+                let dest = mediaDir.appendingPathComponent(filename)
+                if !FileManager.default.fileExists(atPath: dest.path) {
+                    try media.copy(filename: filename, to: dest)
+                }
             }
         }
     }
