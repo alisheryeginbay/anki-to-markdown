@@ -123,13 +123,17 @@ public final class AnkiImporter: Sendable {
             let dbPath = tempDir.appendingPathComponent(name)
             if FileManager.default.fileExists(atPath: dbPath.path) {
                 var data = try Data(contentsOf: dbPath)
-                
-                if isZstdCompressed(data) {
-                    data = try decompressZstd(data)
-                }
-                
+
+                // Check if already a valid SQLite database
                 if isSQLiteDatabase(data) {
                     return data
+                }
+
+                // Try Zstd decompression if it looks compressed
+                if isZstdCompressed(data) {
+                    if let decompressed = try? decompressZstd(data), isSQLiteDatabase(decompressed) {
+                        return decompressed
+                    }
                 }
             }
         }
